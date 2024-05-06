@@ -382,7 +382,7 @@ void EXT_FUNC CBasePlayer::__API_HOOK(Radio)(const char *msg_id, const char *msg
 				continue;
 
 			// is this player on our team? (even dead players hear our radio calls)
-			if (pPlayer->m_iTeam == m_iTeam)
+			if (g_pGameRules->PlayerRelationship(this, pPlayer) == GR_TEAMMATE)
 				bSend = true;
 		}
 		// this means we're a spectator
@@ -396,7 +396,7 @@ void EXT_FUNC CBasePlayer::__API_HOOK(Radio)(const char *msg_id, const char *msg
 			if (FNullEnt(pPlayer->m_hObserverTarget))
 				continue;
 
-			if (pPlayer->m_hObserverTarget && pPlayer->m_hObserverTarget->m_iTeam == m_iTeam)
+			if (pPlayer->m_hObserverTarget && g_pGameRules->PlayerRelationship(this, pPlayer->m_hObserverTarget) == GR_TEAMMATE)
 			{
 				bSend = true;
 			}
@@ -411,11 +411,15 @@ void EXT_FUNC CBasePlayer::__API_HOOK(Radio)(const char *msg_id, const char *msg
 			MESSAGE_END();
 
 			// radio message icon
-			if (msg_verbose)
+			if (msg_verbose && msg_verbose[0] != 0)
 			{
 				// search the place name where is located the player
 				const char *placeName = nullptr;
-				if (AreRunningCZero() && TheBotPhrases)
+				if ((
+#ifdef REGAMEDLL_ADD
+					location_area_info.value >= 2 ||
+#endif
+					AreRunningCZero()) && TheBotPhrases)
 				{
 					Place playerPlace = TheNavAreaGrid.GetPlace(&pev->origin);
 					const BotPhraseList *placeList = TheBotPhrases->GetPlaceList();
@@ -427,11 +431,25 @@ void EXT_FUNC CBasePlayer::__API_HOOK(Radio)(const char *msg_id, const char *msg
 							break;
 						}
 					}
+
+					if (!placeName)
+						placeName = TheNavAreaGrid.IDToName(playerPlace);
 				}
-				if (placeName)
-					ClientPrint(pEntity->pev, HUD_PRINTRADIO, NumAsString(entindex()), "#Game_radio_location", STRING(pev->netname), placeName, msg_verbose);
+
+				if (placeName && placeName[0])
+				{
+					bool bUseLocFallback = false;
+#ifdef REGAMEDLL_ADD
+					if (chat_loc_fallback.value)
+						bUseLocFallback = true;
+#endif
+
+					ClientPrint(pEntity->pev, HUD_PRINTRADIO, NumAsString(entindex()), bUseLocFallback ? "\x3%s1\x1 @ \x4%s2\x1 (RADIO): %s3" : "#Game_radio_location", STRING(pev->netname), placeName, msg_verbose);
+				}
 				else
+				{
 					ClientPrint(pEntity->pev, HUD_PRINTRADIO, NumAsString(entindex()), "#Game_radio", STRING(pev->netname), msg_verbose);
+				}
 			}
 
 			// icon over the head for teammates
@@ -10081,9 +10099,13 @@ void CBasePlayer::UpdateLocation(bool forceUpdate)
 	if (!forceUpdate && m_flLastUpdateTime >= gpGlobals->time + 2.0f)
 		return;
 
-	const char *placeName = "";
+	const char *placeName = nullptr;
 
-	if (pev->deadflag == DEAD_NO && AreBotsAllowed())
+	if (pev->deadflag == DEAD_NO && (
+#ifdef REGAMEDLL_ADD
+		(location_area_info.value == 1 || location_area_info.value == 3) ||
+#endif
+		AreBotsAllowed()))
 	{
 		// search the place name where is located the player
 		Place playerPlace = TheNavAreaGrid.GetPlace(&pev->origin);
@@ -10096,9 +10118,12 @@ void CBasePlayer::UpdateLocation(bool forceUpdate)
 				break;
 			}
 		}
+
+		if (!placeName)
+			placeName = TheNavAreaGrid.IDToName(playerPlace);
 	}
 
-	if (!placeName[0] || (m_lastLocation[0] && !Q_strcmp(placeName, &m_lastLocation[1])))
+	if (!placeName || !placeName[0] || (m_lastLocation[0] && !Q_strcmp(placeName, &m_lastLocation[1])))
 	{
 		return;
 	}
@@ -10658,6 +10683,11 @@ bool CBasePlayer::Kill()
 
 	// have the player kill himself
 	pev->health = 0.0f;
+
+#ifdef REGAMEDLL_API
+	CSPlayer()->ResetAllStats(); // reset damage stats on killed himself or team change
+#endif
+
 	Killed(pev, GIB_NEVER);
 
 	if (CSGameRules()->m_pVIP == this)
